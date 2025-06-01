@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { getCourseAttendance } from '../services/attendanceService';
 import Button from './ui/Button';
 import Card from './ui/Card';
@@ -42,20 +42,32 @@ const AttendanceView: React.FC<AttendanceViewProps> = ({ courseId, courseName, a
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedDate, setSelectedDate] = useState<string>('');
   const [isDownloading, setIsDownloading] = useState(false);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(1);
+  const [totalCount, setTotalCount] = useState(0);
+  const [hasNext, setHasNext] = useState(false);
+  const [hasPrevious, setHasPrevious] = useState(false);
+  const pageSize = 10;
+  const searchTimeoutRef = useRef<NodeJS.Timeout>();
 
   useEffect(() => {
     fetchAttendanceData();
-  }, [courseId]);
+  }, [courseId, currentPage, searchTerm]);
 
   const fetchAttendanceData = async () => {
     try {
       setIsLoading(true);
       setError(null);
-      const data = await getCourseAttendance(courseId);
+      const response = await getCourseAttendance(courseId, currentPage, pageSize, searchTerm);
+      
+      console.log('Attendance Response:', response);
+      console.log('Total Count:', response.totalCount);
+      console.log('Has Next:', response.hasNext);
+      console.log('Has Previous:', response.hasPrevious);
       
       // Transform flat attendance records into grouped by date structure
       const groupedData: { [key: string]: AttendanceRecord[] } = {};
-      data.forEach(record => {
+      response.items.forEach(record => {
         const isoDate = new Date(record.date).toISOString().split('T')[0]; // yyyy-mm-dd
         if (!groupedData[isoDate]) {
           groupedData[isoDate] = [];
@@ -71,7 +83,7 @@ const AttendanceView: React.FC<AttendanceViewProps> = ({ courseId, courseName, a
           id: record.studentId,
           name: record.studentName,
           image: null,
-          attendedClasses: 1, // Since this is attendance data, they attended
+          attendedClasses: 1,
           absences: 0,
           excusedAbsences: 0,
           totalClasses: 1
@@ -79,6 +91,10 @@ const AttendanceView: React.FC<AttendanceViewProps> = ({ courseId, courseName, a
       }));
       
       setAttendanceData(transformedData);
+      setTotalPages(response.totalPages || 1);
+      setTotalCount(response.totalCount || 0);
+      setHasNext(response.hasNext || false);
+      setHasPrevious(response.hasPrevious || false);
     } catch (err: any) {
       setError(err.message || 'Failed to fetch attendance data');
     } finally {
@@ -86,16 +102,30 @@ const AttendanceView: React.FC<AttendanceViewProps> = ({ courseId, courseName, a
     }
   };
 
+  const handleSearchChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const value = e.target.value;
+    setSearchTerm(value);
+    setCurrentPage(1); // Reset to first page when searching
+    
+    // Debounce search
+    if (searchTimeoutRef.current) {
+      clearTimeout(searchTimeoutRef.current);
+    }
+    searchTimeoutRef.current = setTimeout(() => {
+      fetchAttendanceData();
+    }, 500);
+  };
+
+  const handlePageChange = (newPage: number) => {
+    if (newPage < 1 || newPage > totalPages) return;
+    setCurrentPage(newPage);
+    // Scroll to top when changing pages
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
   const filteredData = attendanceData.filter(attendance => {
-    // First apply date filter
-    const dateMatch = !selectedDate || attendance.date === selectedDate;
-    
-    // Then apply name search filter
-    const searchMatch = attendance.listStudent.some(student =>
-      student.name.toLowerCase().includes(searchTerm.toLowerCase())
-    );
-    
-    return dateMatch && searchMatch;
+    // Only apply date filter locally since search is handled by server
+    return !selectedDate || attendance.date === selectedDate;
   });
 
   const filteredStudents = (students: Student[]) => {
@@ -175,7 +205,7 @@ const AttendanceView: React.FC<AttendanceViewProps> = ({ courseId, courseName, a
     const averageAttendance = totalClasses > 0 ? (totalAttended / totalClasses) * 100 : 0;
 
     return {
-      totalStudents: totalStudents / (filteredData.length || 1),
+      totalStudents: totalCount,
       averageAttendance: averageAttendance.toFixed(2),
       totalAbsences
     };
@@ -231,6 +261,18 @@ const AttendanceView: React.FC<AttendanceViewProps> = ({ courseId, courseName, a
                 </div>
               </Card>
             </div>
+          ) : filteredData.length === 0 ? (
+            <Card variant="glass">
+              <div className="text-center py-12">
+                <svg className="h-16 w-16 text-gray-400 mx-auto mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9.172 16.172a4 4 0 015.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+                <p className="text-xl font-medium text-gray-600">No attendance records found</p>
+                <p className="text-gray-500 mt-2">
+                  {searchTerm || selectedDate ? 'Try adjusting your filters' : 'No data available for this course'}
+                </p>
+              </div>
+            </Card>
           ) : (
             <div className="p-8 space-y-6">
               {/* Statistics Cards */}
@@ -252,8 +294,8 @@ const AttendanceView: React.FC<AttendanceViewProps> = ({ courseId, courseName, a
                 <Card variant="gradient">
                   <div className="flex items-center justify-between">
                     <div>
-                      <p className="text-sm font-medium text-gray-600">Total Students</p>
-                      <p className="text-3xl font-bold text-gray-800 mt-1">{Math.round(stats.totalStudents)}</p>
+                      <p className="text-sm font-medium text-gray-600">Total Records</p>
+                      <p className="text-3xl font-bold text-gray-800 mt-1">{totalCount}</p>
                     </div>
                     <div className="p-3 bg-gradient-to-r from-blue-500 to-indigo-600 rounded-xl text-white">
                       <svg className="h-8 w-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -291,12 +333,16 @@ const AttendanceView: React.FC<AttendanceViewProps> = ({ courseId, courseName, a
                       type="text"
                       placeholder="Search by student name..."
                       value={searchTerm}
-                      onChange={(e) => setSearchTerm(e.target.value)}
+                      onChange={handleSearchChange}
                       className="pl-10 w-full px-4 py-3 border-2 border-gray-200 rounded-xl text-gray-900 placeholder-gray-500 focus:outline-none focus:ring-4 focus:ring-purple-500/20 focus:border-purple-500 transition-all duration-200"
                     />
                     {searchTerm && (
                       <button
-                        onClick={() => setSearchTerm('')}
+                        onClick={() => {
+                          setSearchTerm('');
+                          setCurrentPage(1);
+                          fetchAttendanceData();
+                        }}
                         className="absolute inset-y-0 right-0 pr-3 flex items-center"
                       >
                         <svg className="h-5 w-5 text-gray-400 hover:text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -342,127 +388,153 @@ const AttendanceView: React.FC<AttendanceViewProps> = ({ courseId, courseName, a
               </Card>
 
               {/* Attendance Data */}
-              {filteredData.length === 0 ? (
-                <Card variant="glass">
-                  <div className="text-center py-12">
-                    <svg className="h-16 w-16 text-gray-400 mx-auto mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9.172 16.172a4 4 0 015.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                    </svg>
-                    <p className="text-xl font-medium text-gray-600">No attendance records found</p>
-                    <p className="text-gray-500 mt-2">
-                      {searchTerm || selectedDate ? 'Try adjusting your filters' : 'No data available for this course'}
-                    </p>
-                  </div>
-                </Card>
-              ) : (
-                <div className="space-y-6">
-                  {filteredData.map((attendance) => {
-                    const students = filteredStudents(attendance.listStudent);
-                    if (students.length === 0) return null;
+              <div className="space-y-6">
+                {filteredData.map((attendance) => {
+                  const students = filteredStudents(attendance.listStudent);
+                  if (students.length === 0) return null;
 
-                    return (
-                      <Card key={attendance.id} variant="glass">
-                        <div className="mb-4">
-                          <h3 className="text-xl font-bold text-gray-800 flex items-center">
-                            <svg className="h-6 w-6 mr-2 text-purple-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
-                            </svg>
-                            {new Date(attendance.date).toLocaleDateString('en-US', {
-                              weekday: 'long',
-                              year: 'numeric',
-                              month: 'long',
-                              day: 'numeric'
-                            })}
-                          </h3>
-                          <p className="text-gray-600 mt-1">{students.length} students</p>
-                        </div>
+                  return (
+                    <Card key={attendance.id} variant="glass">
+                      <div className="mb-4">
+                        <h3 className="text-xl font-bold text-gray-800 flex items-center">
+                          <svg className="h-6 w-6 mr-2 text-purple-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                          </svg>
+                          {new Date(attendance.date).toLocaleDateString('en-US', {
+                            weekday: 'long',
+                            year: 'numeric',
+                            month: 'long',
+                            day: 'numeric'
+                          })}
+                        </h3>
+                        <p className="text-gray-600 mt-1">{students.length} students</p>
+                      </div>
 
-                        <div className="overflow-x-auto">
-                          <table className="w-full">
-                            <thead>
-                              <tr className="bg-gray-50 rounded-xl">
-                                <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider">
-                                  Student Name
-                                </th>
-                                <th className="px-4 py-3 text-center text-xs font-semibold text-gray-700 uppercase tracking-wider">
-                                  Attended
-                                </th>
-                                <th className="px-4 py-3 text-center text-xs font-semibold text-gray-700 uppercase tracking-wider">
-                                  Absences
-                                </th>
-                                <th className="px-4 py-3 text-center text-xs font-semibold text-gray-700 uppercase tracking-wider">
-                                  Excused
-                                </th>
-                                <th className="px-4 py-3 text-center text-xs font-semibold text-gray-700 uppercase tracking-wider">
-                                  Total Classes
-                                </th>
-                                <th className="px-4 py-3 text-center text-xs font-semibold text-gray-700 uppercase tracking-wider">
-                                  Attendance %
-                                </th>
-                              </tr>
-                            </thead>
-                            <tbody className="divide-y divide-gray-100">
-                              {students.map((student) => {
-                                const attendancePercentage = student.totalClasses > 0
-                                  ? (student.attendedClasses / student.totalClasses) * 100
-                                  : 0;
+                      <div className="overflow-x-auto">
+                        <table className="w-full">
+                          <thead>
+                            <tr className="bg-gray-50 rounded-xl">
+                              <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider">
+                                Student Name
+                              </th>
+                              <th className="px-4 py-3 text-center text-xs font-semibold text-gray-700 uppercase tracking-wider">
+                                Attended
+                              </th>
+                              <th className="px-4 py-3 text-center text-xs font-semibold text-gray-700 uppercase tracking-wider">
+                                Absences
+                              </th>
+                              <th className="px-4 py-3 text-center text-xs font-semibold text-gray-700 uppercase tracking-wider">
+                                Excused
+                              </th>
+                              <th className="px-4 py-3 text-center text-xs font-semibold text-gray-700 uppercase tracking-wider">
+                                Total Classes
+                              </th>
+                              <th className="px-4 py-3 text-center text-xs font-semibold text-gray-700 uppercase tracking-wider">
+                                Attendance %
+                              </th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-gray-100">
+                            {students.map((student) => {
+                              const attendancePercentage = student.totalClasses > 0
+                                ? (student.attendedClasses / student.totalClasses) * 100
+                                : 0;
 
-                                return (
-                                  <tr key={student.id} className="hover:bg-gray-50 transition-colors duration-200">
-                                    <td className="px-4 py-4">
-                                      <div className="flex items-center">
-                                        <div className="h-10 w-10 bg-gradient-to-r from-indigo-500 to-purple-600 rounded-full flex items-center justify-center text-white font-semibold mr-3">
-                                          {student.name.charAt(0).toUpperCase()}
-                                        </div>
-                                        <span className="font-medium text-gray-900">
-                                          {highlightSearchTerm(student.name)}
-                                        </span>
+                              return (
+                                <tr key={student.id} className="hover:bg-gray-50 transition-colors duration-200">
+                                  <td className="px-4 py-4">
+                                    <div className="flex items-center">
+                                      <div className="h-10 w-10 bg-gradient-to-r from-indigo-500 to-purple-600 rounded-full flex items-center justify-center text-white font-semibold mr-3">
+                                        {student.name.charAt(0).toUpperCase()}
                                       </div>
-                                    </td>
-                                    <td className="px-4 py-4 text-center">
-                                      <span className="px-3 py-1 text-sm font-semibold text-green-700 bg-green-100 rounded-full">
-                                        {student.attendedClasses}
+                                      <span className="font-medium text-gray-900">
+                                        {highlightSearchTerm(student.name)}
                                       </span>
-                                    </td>
-                                    <td className="px-4 py-4 text-center">
-                                      <span className={`px-3 py-1 text-sm font-semibold rounded-full ${
-                                        student.absences > 0 
-                                          ? 'text-red-700 bg-red-100' 
-                                          : 'text-gray-700 bg-gray-100'
+                                    </div>
+                                  </td>
+                                  <td className="px-4 py-4 text-center">
+                                    <span className="px-3 py-1 text-sm font-semibold text-green-700 bg-green-100 rounded-full">
+                                      {student.attendedClasses}
+                                    </span>
+                                  </td>
+                                  <td className="px-4 py-4 text-center">
+                                    <span className={`px-3 py-1 text-sm font-semibold rounded-full ${
+                                      student.absences > 0 
+                                        ? 'text-red-700 bg-red-100' 
+                                        : 'text-gray-700 bg-gray-100'
+                                    }`}>
+                                      {student.absences}
+                                    </span>
+                                  </td>
+                                  <td className="px-4 py-4 text-center">
+                                    <span className="px-3 py-1 text-sm font-semibold text-yellow-700 bg-yellow-100 rounded-full">
+                                      {student.excusedAbsences}
+                                    </span>
+                                  </td>
+                                  <td className="px-4 py-4 text-center font-medium text-gray-700">
+                                    {student.totalClasses}
+                                  </td>
+                                  <td className="px-4 py-4 text-center">
+                                    <div className="flex items-center justify-center">
+                                      <span className={`font-bold ${
+                                        attendancePercentage >= 80 ? 'text-green-600' :
+                                        attendancePercentage >= 60 ? 'text-yellow-600' :
+                                        'text-red-600'
                                       }`}>
-                                        {student.absences}
+                                        {attendancePercentage.toFixed(1)}%
                                       </span>
-                                    </td>
-                                    <td className="px-4 py-4 text-center">
-                                      <span className="px-3 py-1 text-sm font-semibold text-yellow-700 bg-yellow-100 rounded-full">
-                                        {student.excusedAbsences}
-                                      </span>
-                                    </td>
-                                    <td className="px-4 py-4 text-center font-medium text-gray-700">
-                                      {student.totalClasses}
-                                    </td>
-                                    <td className="px-4 py-4 text-center">
-                                      <div className="flex items-center justify-center">
-                                        <span className={`font-bold ${
-                                          attendancePercentage >= 80 ? 'text-green-600' :
-                                          attendancePercentage >= 60 ? 'text-yellow-600' :
-                                          'text-red-600'
-                                        }`}>
-                                          {attendancePercentage.toFixed(1)}%
-                                        </span>
-                                      </div>
-                                    </td>
-                                  </tr>
-                                );
-                              })}
-                            </tbody>
-                          </table>
-                        </div>
-                      </Card>
-                    );
-                  })}
+                                    </div>
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                    </Card>
+                  );
+                })}
+
+                {/* Pagination Controls */}
+                <div className="flex items-center justify-between mt-6 px-4 bg-gray-50 py-4 rounded-lg">
+                  <div className="text-sm text-gray-700">
+                    Page {currentPage} of {totalPages} • Total Records: {totalCount}
+                  </div>
+                  <div className="flex items-center space-x-2">
+                    <button
+                      onClick={() => {
+                        console.log('Previous clicked, current page:', currentPage);
+                        handlePageChange(currentPage - 1);
+                      }}
+                      disabled={!hasPrevious}
+                      className={`px-4 py-2 rounded-lg ${
+                        hasPrevious
+                          ? 'bg-indigo-600 text-white hover:bg-indigo-700'
+                          : 'bg-gray-200 text-gray-500 cursor-not-allowed'
+                      } transition-colors duration-200`}
+                    >
+                      Previous
+                    </button>
+                    <span className="px-3 text-sm text-gray-600">
+                      Page {currentPage}
+                    </span>
+                    <button
+                      onClick={() => {
+                        console.log('Next clicked, current page:', currentPage);
+                        handlePageChange(currentPage + 1);
+                      }}
+                      disabled={!hasNext}
+                      className={`px-4 py-2 rounded-lg ${
+                        hasNext
+                          ? 'bg-indigo-600 text-white hover:bg-indigo-700'
+                          : 'bg-gray-200 text-gray-500 cursor-not-allowed'
+                      } transition-colors duration-200`}
+                    >
+                      Next
+                    </button>
+                  </div>
                 </div>
-              )}
+              </div>
             </div>
           )}
         </div>

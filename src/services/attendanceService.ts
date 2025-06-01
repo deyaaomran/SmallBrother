@@ -11,15 +11,26 @@ export interface AttendanceRecord {
 }
 
 interface AttendanceResponse {
+  result: any;
   value: {
     items: AttendanceRecord[];
-    totalCount: number;
+    totalRecords: number;
+    pageNumber: number;
     pageSize: number;
-    currentPage: number;
     totalPages: number;
-    hasNext: boolean;
-    hasPrevious: boolean;
+    hasPreviousPage: boolean;
+    hasNextPage: boolean;
   };
+}
+
+export interface PaginatedAttendanceResponse {
+  items: AttendanceRecord[];
+  totalCount: number;
+  pageSize: number;
+  currentPage: number;
+  totalPages: number;
+  hasNext: boolean;
+  hasPrevious: boolean;
 }
 
 // Create axios instance with default config
@@ -47,20 +58,42 @@ api.interceptors.request.use(
 
 export const getCourseAttendance = async (
   courseId: number,
-  pageNumber: number = 1,
-  pageSize: number = 20
-): Promise<AttendanceRecord[]> => {
+  PageNumber: number = 1,
+  PageSize: number = 10,
+  searchTerm: string = ''
+): Promise<PaginatedAttendanceResponse> => {
   try {
+    console.log('Fetching attendance with params:', { courseId, PageNumber, PageSize, searchTerm });
+    
     const response = await api.get<AttendanceResponse>('/Attendance/for-course', {
       params: {
         courseId,
-        PageNumber: pageNumber,
-        PageSize: pageSize
+        PageNumber,
+        PageSize,
+        searchTerm: searchTerm || undefined
       }
     });
 
-    return response.data.value.items;
+    console.log('API Response:', response.data);
+    console.log('Response value:', response.data?.value);
+
+    const data = response.data?.value;
+    
+    if (!data) {
+      throw new Error('Invalid response structure from API');
+    }
+    
+    return {
+      items: data.items || [],
+      totalCount: data.totalRecords || 0,
+      pageSize: data.pageSize || PageSize,
+      currentPage: data.pageNumber || PageNumber,
+      totalPages: data.totalPages || 1,
+      hasNext: data.hasNextPage || false,
+      hasPrevious: data.hasPreviousPage || false
+    };
   } catch (error: any) {
+    console.error('Error fetching attendance:', error);
     if (error.response) {
       throw new Error(error.response.data?.message || 'Failed to fetch attendance data.');
     } else if (error.request) {
